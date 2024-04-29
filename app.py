@@ -31,24 +31,40 @@ def calculate_num_sentences(num_sentences):
     num_sentences = math.floor(num_sentences / 2)
     return max(1, num_sentences)
 
-@app.route('/summarize', methods=['POST'])
-def summarize():
-    csv_file = request.files['file']
-    csv_text = csv_file.stream.read().decode('latin-1')
-
-    summaries = []
-
-    if csv_file.filename.lower().endswith('.csv'):
+@app.route('/summarize-file', methods=['POST'])
+def summarize_file():
+    file = request.files['file']
+    if file.filename.lower().endswith('.csv'):
+        csv_text = file.stream.read().decode('latin-1')
+        summaries = []
         csv_data = csv.reader(io.StringIO(csv_text))
         for row in csv_data:
             if row:  # Check if the row is not empty
                 text = row[0].strip()  # Trim leading and trailing whitespace
                 num_sentences = calculate_num_sentences(len(sent_tokenize(text)))
-                summary = summarize_dataset(text, num_sentences)
-                summaries.append(summary)
+                summary = summarize_text(text, num_sentences)
+                summaries.append(summary)  # Append each summary as a separate row
+        cleaned_csv_data = convert_to_csv(summaries)
+        return Response(cleaned_csv_data, mimetype='text/csv', headers={'Content-Disposition': 'attachment; filename=summary.csv'})
+    else:
+        return "Error: Please upload a CSV file."
 
-    csv_output = convert_to_csv(summaries)
-    return Response(csv_output, mimetype='text/csv', headers={'Content-Disposition': 'attachment; filename=summary.csv'})
+
+@app.route('/summarize-text', methods=['POST'])
+def summarize_text():
+    data = request.get_json()
+    if 'text' in data:
+        input_text = data['text']
+        num_sentences = calculate_num_sentences(len(sent_tokenize(input_text)))
+        summary = summarize_text(input_text, num_sentences)  # Summarize the text
+
+        # Clean each sentence in the summary before joining them
+        cleaned_sentences = [clean_text(sentence) for sentence in summary]
+        cleaned_summary = ' '.join(cleaned_sentences)  # Join the cleaned sentences into a single paragraph
+        return cleaned_summary
+    else:
+        return "Error: Text data not provided in the request."
+
 
 def summarize_dataset(text, num_sentences):
     summary = summarize_text(text, num_sentences=num_sentences)
@@ -162,7 +178,7 @@ def clean_text(text):
     cleaned_text = ''.join(char for char in text if unicodedata.category(char)[0] != 'C' or char in allowed_characters)
     
     # Normalize Unicode characters to remove accents and diacritics
-    cleaned_text = unicodedata.normalize('NFKD', cleaned_text).encode('ascii', 'ignore').decode('utf-8', 'ignore')
+    cleaned_text = unicodedata.normalize('NFKD', cleaned_text).encode('ascii', 'ignore').decode('latin-1', 'ignore')
     
     return cleaned_text.strip()
 
@@ -170,10 +186,12 @@ def convert_to_csv(summaries):
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
     for summary in summaries:
-        # Clean and normalize the summary text
-        cleaned_summary = clean_text(summary)
-        # Write the cleaned summary to CSV
-        writer.writerow([cleaned_summary])
+        # Clean and normalize each sentence in the summary before joining them
+        cleaned_sentences = [clean_text(sentence) for sentence in summary]
+        cleaned_summary = ' '.join(cleaned_sentences)  # Join the cleaned sentences into a single paragraph
+        
+        # Write the cleaned summary to CSV using UTF-8 encoding
+        writer.writerow([cleaned_summary.encode('utf-8').decode('utf-8-sig')])  # Use utf-8-sig to handle BOM for Excel
     csv_data = output.getvalue()
     output.close()
     return csv_data
